@@ -1,0 +1,87 @@
+name: Build APK
+
+# 릴리스할 때만 빌드: VERSION 파일을 바꿔서 push하면 빌드 → 'latest' 릴리스에 APK 올림
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'VERSION' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # 내 저장소에서만 (포크·외부 풀 리퀘스트로는 실행 안 됨 — pull_request 트리거도 없음)
+    if: github.repository == 'kakario777-netizen/household-book'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Signing key (Secrets)
+        env:
+          KEYSTORE_B64: ${{ secrets.HB_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "HB_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "HAS_KEY=1" >> "$GITHUB_ENV"
+          else
+            echo "서명 키 Secret(HB_KEYSTORE_B64)이 없어 컴파일 확인만 합니다"
+            echo "HAS_KEY=0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build
+        env:
+          HB_KEYSTORE_PASSWORD: ${{ secrets.HB_KEYSTORE_PASSWORD }}
+        run: |
+          set -o pipefail
+          if [ "$HAS_KEY" = "1" ]; then TASK=":app:assembleRelease"; else TASK=":app:assembleDebug"; fi
+          gradle $TASK --no-daemon 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Publish to Releases (latest)
+        if: env.HAS_KEY == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(tr -d ' \r\n' < VERSION)
+          cp app/build/outputs/apk/release/app-release.apk household-book.apk
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest household-book.apk \
+            --title "가계부 v$V 최신 빌드 #${{ github.run_number }}" \
+            --notes "폰에서 아래 household-book.apk를 눌러 받아 설치하세요. 설치 후에는 앱 안에서 자동 업데이트돼요." \
+            --target ${{ github.sha }}
+
+      # 빌드 결과(성공/실패 + 마지막 로그)를 build-log 가지에 남김 — 채팅에서 확인용, 비밀값은 찍히지 않음
+      - name: Save build log
+        if: always()
+        run: |
+          mkdir -p /tmp/bl && cd /tmp/bl
+          {
+            echo "run: ${{ github.run_number }}  commit: ${{ github.sha }}  status: ${{ job.status }}  signed: $HAS_KEY"
+            echo "----"
+            grep -E "^e: |error:|FAILURE|What went wrong|BUILD (SUCCESSFUL|FAILED)" -A3 "$RUNNER_TEMP/build.log" 2>/dev/null | head -150 || true
+            echo "---- tail"
+            tail -40 "$RUNNER_TEMP/build.log" 2>/dev/null || true
+          } > log.txt
+          git init -q && git checkout -q -b build-log
+          git config user.name "build-bot" && git config user.email "build-bot@users.noreply.github.com"
+          git add log.txt && git commit -qm "build ${{ github.run_number }}: ${{ job.status }}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" build-log

@@ -114,7 +114,7 @@ fun SettingsScreen(
             }
         }
 
-        item { SectionTitle("구글 드라이브 백업") }
+        item { SectionTitle("백업·동기화") }
         item { BackupSection(onChanged) }
 
         item { SectionTitle("문자") }

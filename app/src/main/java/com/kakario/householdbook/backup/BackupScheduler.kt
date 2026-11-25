@@ -22,7 +22,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-/** 매일 정한 시각(기본 밤 12시)에 드라이브 백업 */
+/** 매일 정한 시각(기본 밤 12시)에 FTP 서버로 백업 (구글 드라이브는 준비 중) */
 object BackupScheduler {
 
     private fun alarmIntent(ctx: Context) = PendingIntent.getBroadcast(
@@ -41,7 +41,7 @@ object BackupScheduler {
     fun schedule(ctx: Context) {
         val am = ctx.getSystemService(AlarmManager::class.java) ?: return
         val pi = alarmIntent(ctx)
-        if (!DriveBackup.enabled(ctx)) { am.cancel(pi); return }
+        if (!FtpBackup.enabled(ctx)) { am.cancel(pi); return }
         // 정확한 알람 권한 없이도 되는 방식 (절전 중에도 울림, 몇 분 늦을 수 있음)
         am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextTime(DriveBackup.hour(ctx)), pi)
     }
@@ -56,7 +56,7 @@ object BackupScheduler {
 
     /** 폰이 꺼져 있어서 놓친 백업이 있으면 (마지막 성공이 하루 넘게 지났으면) 지금 */
     fun catchUp(ctx: Context) {
-        if (!DriveBackup.enabled(ctx)) return
+        if (!FtpBackup.enabled(ctx)) return
         schedule(ctx)
         val last = DriveBackup.lastOkTime(ctx)
         if (last > 0 && System.currentTimeMillis() - last > 26L * 3600 * 1000 && !DriveBackup.needsReconnect(ctx)) runNow(ctx)
@@ -82,15 +82,9 @@ class BootReceiver : BroadcastReceiver() {
 class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         val ctx = applicationContext
-        if (!DriveBackup.enabled(ctx)) return Result.success()
+        if (!FtpBackup.enabled(ctx)) return Result.success()
         return try {
-            val token = DriveBackup.tokenSilently(ctx)
-            if (token == null) {
-                DriveBackup.saveStatus(ctx, false, "구글 연결이 풀렸어요. 설정에서 다시 연결해 주세요.", reconnect = true)
-                notify(ctx, "가계부 백업을 못 했어요", "구글 계정 연결이 풀렸어요. 앱 설정에서 다시 연결해 주세요.")
-                return Result.failure()
-            }
-            val name = DriveBackup.backupNow(ctx, token)
+            val name = FtpBackup.backupNow(ctx)
             DriveBackup.saveStatus(ctx, true, "${BackupScheduler.timeText(System.currentTimeMillis())} 백업 완료 ($name)")
             Result.success()
         } catch (e: Exception) {

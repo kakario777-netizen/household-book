@@ -61,4 +61,6 @@ dependencies {
     // 구글 드라이브 백업: 로그인·권한(내가 만든 파일만) + 매일 자동 실행
     implementation("com.google.android.gms:play-services-auth:21.2.0")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+    // FTP 서버(NAS) 백업·동기화
+    implementation("commons-net:commons-net:3.11.1")
 }

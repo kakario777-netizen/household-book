@@ -158,7 +158,7 @@ fun CalendarScreen(
             // ── 아래: 고른 날 내역 ──
             val dayList = byDay[selDay].orEmpty().sortedBy { it.t.time }
             val planned = upByDay[selDay].orEmpty()
-            SectionTitle("${ym % 100}월 ${selDay}일 (${WEEK[(first + selDay - 1) % 7]})", won(dayTotal[selDay] ?: 0L))
+            SectionTitle("${ym % 100}월 ${selDay}일 (${WEEK[(firstWeekday(ym) + selDay - 1) % 7]})", won(dayTotal[selDay] ?: 0L))
             if (dayList.isEmpty() && planned.isEmpty()) {
                 Text("결제 내역이 없어요", color = Gray, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }

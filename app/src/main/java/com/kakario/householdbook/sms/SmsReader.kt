@@ -7,6 +7,7 @@ import android.database.Cursor
 import android.net.Uri
 import androidx.core.content.ContextCompat
 import com.kakario.householdbook.data.CardConf
+import com.kakario.householdbook.data.Pending
 import com.kakario.householdbook.data.digits
 
 /** 받은 문자 한 통. src = SMS / MMS / RCS */
@@ -202,26 +203,40 @@ object SmsReader {
             }
     }
 
-    /** 기간 안의 카드 결제 문자 → 결제 목록 (같은 문자가 여러 칸에 저장된 경우 하나로) */
-    fun payments(ctx: Context, cards: List<CardConf>, from: Long, to: Long): List<ParsedPay> {
+    /** 기간 안의 카드 결제 문자 → (결제 목록, 결제로 못 읽은 애매한 카드사 문자) */
+    fun payments(ctx: Context, cards: List<CardConf>, from: Long, to: Long): Pair<List<ParsedPay>, List<Pending>> {
         val result = ArrayList<ParsedPay>()
+        val suspects = ArrayList<Pending>()
         val seen = HashSet<String>()
+        val on = cards.filter { it.enabled }
         for (m in inbox(ctx, from, to).sortedBy { it.time }) {
-            val card = cardFor(m, cards) ?: continue
-            val r = SmsParser.parse(m.body, m.time)
-            if (!r.ok) continue
-            val key = "${card.id}|${r.amount}|${r.cancel}|${r.kind}|${r.time / 60000}"
-            if (!seen.add(key)) continue
-            result.add(
-                ParsedPay(
-                    key = key, card = card.id, time = r.time, merchant = r.merchant.trim(),
-                    amount = r.amount, cancel = r.cancel, installment = r.installment,
-                    kind = r.kind, raw = m.body.trim(),
+            val card = cardFor(m, cards)
+            val r = if (card != null) SmsParser.parse(m.body, m.time) else null
+            if (card != null && r != null && r.ok) {
+                val key = "${card.id}|${r.amount}|${r.cancel}|${r.kind}|${r.time / 60000}"
+                if (!seen.add(key)) continue
+                result.add(
+                    ParsedPay(
+                        key = key, card = card.id, time = r.time, merchant = r.merchant.trim(),
+                        amount = r.amount, cancel = r.cancel, installment = r.installment,
+                        kind = r.kind, raw = m.body.trim(),
+                    )
                 )
-            )
+                continue
+            }
+            // 카드사 번호(또는 카드 이름)에서 온 금액 문자인데 결제로 못 읽음 → 확인 필요
+            val src = card ?: on.firstOrNull { numberMatch(m.address, it.numbers) }
+                ?: on.firstOrNull { bodyMatch(m.body, it) } ?: continue
+            if (m.body.contains("광고")) continue
+            val amt = AMOUNT.findAll(m.body).mapNotNull { digits(it.groupValues[1]).toLongOrNull() }.maxOrNull() ?: continue
+            val key = "p|${src.id}|${m.time / 60000}|${m.body.hashCode()}"
+            if (!seen.add(key)) continue
+            suspects.add(Pending(key, src.id, m.time, m.body.trim(), amt))
         }
-        return result
+        return result to suspects
     }
+
+    private val AMOUNT = Regex("(\\d{1,3}(?:,\\d{3})+|\\d+)\\s*원")
 
     /** 최근 문자에서 키워드가 들어간 결제 문자를 보낸 번호 찾기 (번호 → 건수) */
     fun findSenders(ctx: Context, keyword: String, days: Int = 90): List<Pair<String, Int>> {

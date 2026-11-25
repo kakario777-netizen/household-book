@@ -114,6 +114,9 @@ fun SettingsScreen(
             }
         }
 
+        item { SectionTitle("구글 드라이브 백업") }
+        item { BackupSection(onChanged) }
+
         item { SectionTitle("문자") }
         item {
             Column(Modifier.padding(horizontal = 16.dp)) {

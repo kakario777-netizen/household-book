@@ -111,7 +111,7 @@ private fun RecRow(r: Recurring, data: BookData, action: String, dim: Boolean = 
                 Text(
                     listOf(
                         data.cardName(r.card), category(r.cat).name,
-                        if (r.auto) "자동납부" else "최근 1년 ${r.months}번",
+                        when { r.id in data.forcedRecurring -> "직접 지정"; r.auto -> "자동납부"; else -> "최근 1년 ${r.months}번" },
                         "마지막 ${dateText(r.lastTime)}",
                     ).joinToString(" · "),
                     fontSize = 12.sp, color = Gray, maxLines = 1, overflow = TextOverflow.Ellipsis,

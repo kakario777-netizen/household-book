@@ -8,7 +8,16 @@ import kotlin.math.max
 import kotlin.math.min
 
 /** 화면에 쓰는 한 건 = 결제 + 분류 + 가계부 포함 여부 */
-data class Entry(val t: Txn, val cat: String, val included: Boolean) {
+data class Entry(
+    val t: Txn,                  // 금액 고친 경우 고친 금액이 들어 있음
+    val cat: String,
+    val included: Boolean,
+    val name: String = t.merchant,   // 고친 가게 이름
+    val memo: String = "",
+    val review: Boolean = false,     // 확인이 필요한 결제
+    val amountFixed: Boolean = false,
+    val shopExcluded: Boolean = false,
+) {
     val signed: Long get() = if (included) t.signed else 0L
     val merchantId: String get() = normMerchant(t.merchant)
 }
@@ -32,7 +41,11 @@ class BookData(
     val recurring: List<Recurring>,      // 숨긴 것 제외
     val hiddenRecurring: List<Recurring>,
     val cards: List<CardConf>,
+    val pending: List<Pending> = emptyList(),   // 결제로 못 읽은 문자
+    val forcedRecurring: Set<String> = emptySet(),
 ) {
+    val reviewCount: Int get() = pending.size + entries.count { it.review }
+
     fun cardName(id: String): String =
         if (id == CASH) "현금·기타" else cards.firstOrNull { it.id == id }?.name ?: id
 
@@ -60,7 +73,8 @@ object Book {
         val now = System.currentTimeMillis()
         val last = Store.lastSync(ctx)
         val from = if (last == 0L) ymStart(ymAdd(ymOf(now), -12)) else last - 3 * SmsReader.DAY
-        val found = SmsReader.payments(ctx, Store.loadCards(ctx), from, now + SmsReader.DAY)
+        val (found, suspects) = SmsReader.payments(ctx, Store.loadCards(ctx), from, now + SmsReader.DAY)
+        Store.addPending(ctx, suspects)
         val old = Store.loadTxns(ctx)
         val keys = old.mapTo(HashSet()) { it.key }
         val add = found.filter { keys.add(it.key) }.map {
@@ -74,9 +88,9 @@ object Book {
         return add.size
     }
 
-    fun addManual(ctx: Context, time: Long, merchant: String, amount: Long, cat: String) {
-        val t = Txn(key = "m|$time|${System.nanoTime()}", card = CASH, time = time, merchant = merchant.trim(),
-            amount = amount, cancel = false, manual = true)
+    fun addManual(ctx: Context, time: Long, merchant: String, amount: Long, cat: String, card: String = CASH, raw: String = "") {
+        val t = Txn(key = "m|$time|${System.nanoTime()}", card = card, time = time, merchant = merchant.trim(),
+            amount = amount, cancel = false, raw = raw, manual = true)
         synchronized(syncLock) { Store.saveTxns(ctx, Store.loadTxns(ctx) + t) }
         Store.setTxnCat(ctx, t.key, cat)
     }
@@ -85,22 +99,46 @@ object Book {
         synchronized(syncLock) { Store.saveTxns(ctx, Store.loadTxns(ctx).filterNot { it.key == key && it.manual }) }
     }
 
+    /** 결제가 아닐 수도 있거나 내용이 덜 읽힌 것 → 확인 필요 */
+    private fun needsReview(t: Txn) =
+        !t.manual && (t.merchant.isBlank() || t.defaultExcluded || t.kind == "해외 결제")
+
     fun load(ctx: Context): BookData {
         val rules = Store.loadRules(ctx)
         val txnCats = Store.loadTxnCats(ctx)
         val includes = Store.loadIncludes(ctx)
-        val entries = Store.loadTxns(ctx).map { t ->
+        val names = Store.loadNames(ctx)
+        val amounts = Store.loadAmounts(ctx)
+        val memos = Store.loadMemos(ctx)
+        val shopEx = Store.loadShopExcludes(ctx)
+        val reviewed = Store.loadReviewed(ctx)
+        val entries = Store.loadTxns(ctx).map { orig ->
+            val fixed = amounts[orig.key]?.toLongOrNull()
+            val t = if (fixed != null) orig.copy(amount = fixed) else orig
+            val id = normMerchant(t.merchant)
             val cat = txnCats[t.key] ?: Categorizer.categorize(t.merchant, t.kind, rules)
-            val inc = includes[t.key]?.let { it == "1" } ?: !t.defaultExcluded
-            Entry(t, cat, inc)
+            val ex = id.isNotEmpty() && id in shopEx
+            // 이 결제만 고친 것 > 가게 전체 빼기 > 기본값
+            val inc = includes[t.key]?.let { it == "1" } ?: (!ex && !t.defaultExcluded)
+            Entry(
+                t = t, cat = cat, included = inc,
+                name = names[id] ?: t.merchant,
+                memo = memos[t.key].orEmpty(),
+                review = t.key !in reviewed && needsReview(t),
+                amountFixed = fixed != null,
+                shopExcluded = ex,
+            )
         }.sortedBy { it.t.time }
         val hidden = Store.loadHiddenRecurring(ctx)
-        val rec = detectRecurring(entries, System.currentTimeMillis())
+        val forced = Store.loadForcedRecurring(ctx)
+        val rec = detectRecurring(entries, System.currentTimeMillis(), forced)
         return BookData(
             entries = entries,
             recurring = rec.filter { it.id !in hidden },
             hiddenRecurring = rec.filter { it.id in hidden },
             cards = Store.loadCards(ctx),
+            pending = Store.loadPending(ctx).sortedByDescending { it.time },
+            forcedRecurring = forced,
         )
     }
 
@@ -111,7 +149,7 @@ object Book {
     /** 날짜 차이 (말일·1일처럼 달 경계를 넘는 경우 포함) */
     private fun dayDist(a: Int, b: Int): Int { val d = abs(a - b); return min(d, 31 - d) }
 
-    fun detectRecurring(entries: List<Entry>, now: Long): List<Recurring> {
+    fun detectRecurring(entries: List<Entry>, now: Long, forced: Set<String> = emptySet()): List<Recurring> {
         val curYm = ymOf(now)
         val minYm = ymAdd(curYm, -12)
         val groups = entries.filter {
@@ -122,10 +160,10 @@ object Book {
         for ((id, list) in groups) {
             val byMonth = list.groupBy { ymOf(it.t.time) }
             val months = byMonth.keys.sorted()
-            val auto = list.any { it.t.kind == "자동납부" }
+            val auto = list.any { it.t.kind == "자동납부" } || id in forced
             if (months.size < 2 && !auto) continue
-            // 한 달에 여러 번 가는 가게(마트·편의점 등)는 정기결제 아님
-            if (list.size.toDouble() / months.size > 1.5) continue
+            // 한 달에 여러 번 가는 가게(마트·편의점 등)는 정기결제 아님 (직접 지정한 건 예외)
+            if (id !in forced && list.size.toDouble() / months.size > 1.5) continue
 
             val amounts = list.map { it.t.amount }.sorted()
             val med = amounts[amounts.size / 2]
@@ -147,7 +185,7 @@ object Book {
             val last = picks.last()
             out.add(
                 Recurring(
-                    id = id, merchant = last.t.merchant, card = last.t.card, day = days[days.size / 2],
+                    id = id, merchant = last.name, card = last.t.card, day = days[days.size / 2],
                     amount = last.t.amount, cat = last.cat, months = months.size, lastTime = last.t.time,
                     active = monthsBetween(ymOf(last.t.time), curYm) <= 1, auto = auto,
                 )

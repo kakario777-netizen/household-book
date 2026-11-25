@@ -22,6 +22,9 @@ data class Txn(
     val defaultExcluded: Boolean get() = kind == "결제 예정 안내" || kind == "이용금액 안내"
 }
 
+/** 카드사 번호에서 왔는데 결제로 못 읽은(또는 애매한) 문자 */
+data class Pending(val key: String, val card: String, val time: Long, val body: String, val guess: Long)
+
 data class CardConf(
     val id: String,
     val name: String,

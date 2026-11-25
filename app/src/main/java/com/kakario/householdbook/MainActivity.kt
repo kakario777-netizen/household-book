@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         Updater.get(this).check(quiet = true)
+        com.kakario.householdbook.backup.BackupScheduler.catchUp(this)
     }
 
     override fun onResume() {

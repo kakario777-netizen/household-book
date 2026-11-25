@@ -1,6 +1,10 @@
 package com.kakario.householdbook.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -62,6 +66,9 @@ private val WEEK = listOf("일", "월", "화", "수", "목", "금", "토")
 val RecColor = Color(0xFF7B5CC4)
 private val GridLine = Color(0xFFE3E6EA)
 
+private const val PAGE_BASE = 1200
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CalendarScreen(
     data: BookData, ym: Int, onYm: (Int) -> Unit, loading: Boolean, hasSms: Boolean,
@@ -69,88 +76,56 @@ fun CalendarScreen(
 ) {
     val now = System.currentTimeMillis()
     val curYm = ymOf(now)
-    val todayDay = dayOf(now)
-    var selDay by rememberSaveable(ym) { mutableStateOf(if (ym == curYm) todayDay else 1) }
+    var selDay by rememberSaveable(ym) { mutableStateOf(if (ym == curYm) dayOf(now) else 1) }
     var edit by remember { mutableStateOf<Entry?>(null) }
     var adding by remember { mutableStateOf(false) }
+    var reviewing by rememberSaveable { mutableStateOf(false) }
 
+    if (reviewing) {
+        ReviewScreen(data, onBack = { reviewing = false }, onChanged = onChanged)
+        return
+    }
+
+    // 좌우로 밀어서 달 넘기기
+    fun pageOf(m: Int) = PAGE_BASE + monthsBetween(curYm, m)
+    fun ymOfPage(p: Int) = ymAdd(curYm, p - PAGE_BASE)
+    val pager = rememberPagerState(initialPage = pageOf(ym)) { PAGE_BASE * 2 }
+    LaunchedEffect(pager.settledPage) {
+        val m = ymOfPage(pager.settledPage)
+        if (m != ym) onYm(m)
+    }
+    LaunchedEffect(ym) {
+        val p = pageOf(ym)
+        if (pager.currentPage != p) pager.animateScrollToPage(p)
+    }
+
+    val recIds = data.recurring.mapTo(HashSet()) { it.id }
     val month = data.inMonth(ym)
     val byDay = month.groupBy { dayOf(it.t.time) }
     val dayTotal = byDay.mapValues { (_, l) -> l.sumOf { it.signed } }
-    val monthTotal = month.sumOf { it.signed }
-    val recIds = data.recurring.mapTo(HashSet()) { it.id }
-    val dayRec = byDay.mapValues { (_, l) -> l.filter { it.merchantId in recIds }.sumOf { it.signed } }
     val upByDay = Book.upcoming(data, ym, now).groupBy({ it.first }, { it.second })
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val screenH = maxHeight
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
 
-            // ── 한 화면: 합계 + 달력 (화면 끝까지) ──
+            // ── 한 화면: 합계 + 달력 (화면 끝까지, 좌우로 밀면 다른 달) ──
             Column(Modifier.fillMaxWidth().height(screenH)) {
                 if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                 if (!hasSms) PermissionCard(onAskSms, onOpenSettings)
-
-                // 월 이동 + 합계
-                Row(
-                    Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("◀", color = Gray, fontSize = 16.sp, modifier = Modifier.clickable { onYm(ymAdd(ym, -1)) }.padding(12.dp))
-                    Text(ymText(ym), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                    Text("▶", color = Gray, fontSize = 16.sp, modifier = Modifier.clickable { onYm(ymAdd(ym, 1)) }.padding(12.dp))
-                    Spacer(Modifier.weight(1f))
-                    if (ym == curYm) {
-                        Text("오늘 ${num(dayTotal[todayDay] ?: 0L)}원", fontSize = 13.sp, color = Green, fontWeight = FontWeight.Medium)
-                    }
+                HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth().weight(1f), beyondViewportPageCount = 1) { page ->
+                    val pym = ymOfPage(page)
+                    MonthView(
+                        data = data, ym = pym, now = now, recIds = recIds,
+                        selDay = if (pym == ym) selDay else -1,
+                        onSelect = { selDay = it },
+                        onYm = onYm,
+                        reviewCount = data.reviewCount,
+                        onReview = { reviewing = true },
+                    )
                 }
                 Text(
-                    "${num(monthTotal)}원",
-                    fontSize = 34.sp, fontWeight = FontWeight.Bold, maxLines = 1,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
-                )
-
-                // 요일
-                Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp)) {
-                    WEEK.forEachIndexed { i, w ->
-                        Text(
-                            w, Modifier.weight(1f).padding(vertical = 4.dp), textAlign = TextAlign.Center, fontSize = 12.sp,
-                            color = when (i) { 0 -> Red; 6 -> Blue; else -> Gray },
-                        )
-                    }
-                }
-
-                // 달력 칸 (남은 높이를 줄 수만큼 나눠 씀)
-                val first = firstWeekday(ym)
-                val n = daysIn(ym)
-                val rows = (first + n + 6) / 7
-                Column(
-                    Modifier.fillMaxWidth().weight(1f).padding(horizontal = 6.dp)
-                        .border(0.8.dp, GridLine)
-                ) {
-                    for (r in 0 until rows) {
-                        Row(Modifier.fillMaxWidth().weight(1f)) {
-                            for (c in 0 until 7) {
-                                val d = r * 7 + c - first + 1
-                                Box(Modifier.weight(1f).fillMaxHeight().border(0.4.dp, GridLine)) {
-                                    if (d in 1..n) {
-                                        DayCell(
-                                            day = d, weekday = c,
-                                            total = dayTotal[d] ?: 0L,
-                                            rec = dayRec[d] ?: 0L,
-                                            planned = upByDay[d]?.sumOf { it.amount } ?: 0L,
-                                            today = ym == curYm && d == todayDay,
-                                            selected = d == selDay,
-                                            onClick = { selDay = d },
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Text(
-                    "▲ 위로 밀면 ${selDay}일 내역",
+                    "◀ ▶ 좌우로 밀면 다른 달 · ▲ 위로 밀면 ${selDay}일 내역",
                     fontSize = 11.sp, color = Color(0xFFA0A7B0), textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                 )
@@ -178,6 +153,95 @@ fun CalendarScreen(
     edit?.let { EditDialog(it, data, onDismiss = { edit = null }, onChanged = onChanged) }
     if (adding) {
         AddDialog(ymStart(ym) + (selDay - 1) * 24L * 3600 * 1000, onDismiss = { adding = false }, onChanged = onChanged)
+    }
+}
+
+private fun monthsBetween(a: Int, b: Int) = (b / 100 - a / 100) * 12 + (b % 100 - a % 100)
+
+/** 한 달 화면: 월 이동·합계 + 달력 칸 */
+@Composable
+private fun MonthView(
+    data: BookData, ym: Int, now: Long, recIds: Set<String>, selDay: Int,
+    onSelect: (Int) -> Unit, onYm: (Int) -> Unit, reviewCount: Int, onReview: () -> Unit,
+) {
+    val curYm = ymOf(now)
+    val todayDay = dayOf(now)
+    val month = data.inMonth(ym)
+    val byDay = month.groupBy { dayOf(it.t.time) }
+    val dayTotal = byDay.mapValues { (_, l) -> l.sumOf { it.signed } }
+    val monthTotal = month.sumOf { it.signed }
+    val dayRec = byDay.mapValues { (_, l) -> l.filter { it.merchantId in recIds }.sumOf { it.signed } }
+    val upByDay = Book.upcoming(data, ym, now).groupBy({ it.first }, { it.second })
+
+    Column(Modifier.fillMaxSize()) {
+        // 월 이동 + 합계
+        Row(
+            Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("◀", color = Gray, fontSize = 16.sp, modifier = Modifier.clickable { onYm(ymAdd(ym, -1)) }.padding(12.dp))
+            Text(ymText(ym), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text("▶", color = Gray, fontSize = 16.sp, modifier = Modifier.clickable { onYm(ymAdd(ym, 1)) }.padding(12.dp))
+            Spacer(Modifier.weight(1f))
+            if (reviewCount > 0) {
+                Text(
+                    "확인 필요 $reviewCount", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.background(Color(0xFFE08A2E), RoundedCornerShape(12.dp))
+                        .clickable(onClick = onReview).padding(horizontal = 10.dp, vertical = 5.dp),
+                )
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            Text("${num(monthTotal)}원", fontSize = 34.sp, fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.weight(1f))
+            if (ym == curYm) {
+                Text(
+                    "오늘 ${num(dayTotal[todayDay] ?: 0L)}원", fontSize = 13.sp, color = Green, fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+            }
+        }
+
+        // 요일
+        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp)) {
+            WEEK.forEachIndexed { i, w ->
+                Text(
+                    w, Modifier.weight(1f).padding(vertical = 4.dp), textAlign = TextAlign.Center, fontSize = 12.sp,
+                    color = when (i) { 0 -> Red; 6 -> Blue; else -> Gray },
+                )
+            }
+        }
+
+        // 달력 칸 (남은 높이를 줄 수만큼 나눠 씀)
+        val first = firstWeekday(ym)
+        val n = daysIn(ym)
+        val rows = (first + n + 6) / 7
+        Column(
+            Modifier.fillMaxWidth().weight(1f).padding(horizontal = 6.dp).border(0.8.dp, GridLine)
+        ) {
+            for (r in 0 until rows) {
+                Row(Modifier.fillMaxWidth().weight(1f)) {
+                    for (c in 0 until 7) {
+                        val d = r * 7 + c - first + 1
+                        Box(Modifier.weight(1f).fillMaxHeight().border(0.4.dp, GridLine)) {
+                            if (d in 1..n) {
+                                DayCell(
+                                    day = d, weekday = c,
+                                    total = dayTotal[d] ?: 0L,
+                                    rec = dayRec[d] ?: 0L,
+                                    planned = upByDay[d]?.sumOf { it.amount } ?: 0L,
+                                    today = ym == curYm && d == todayDay,
+                                    selected = d == selDay,
+                                    onClick = { onSelect(d) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

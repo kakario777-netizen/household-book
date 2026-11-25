@@ -120,6 +120,139 @@ object Store {
     fun unhideRecurring(ctx: Context, id: String) =
         prefs(ctx).edit().putStringSet("hiddenRec", loadHiddenRecurring(ctx) - id).apply()
 
+    /* ---------- 결제별 수정 ---------- */
+
+    /** 가게 이름 고치기 (정규화된 원래 이름 → 보여줄 이름) — 앞으로 같은 가게 전부 */
+    fun loadNames(ctx: Context) = loadMap(ctx, "names")
+    fun setName(ctx: Context, merchant: String, name: String) {
+        val n = normMerchant(merchant); if (n.isEmpty()) return
+        val m = loadNames(ctx).toMutableMap()
+        if (name.isBlank() || name.trim() == merchant.trim()) m.remove(n) else m[n] = name.trim()
+        saveMap(ctx, "names", m)
+    }
+
+    /** 금액 고치기 (이 결제만) */
+    fun loadAmounts(ctx: Context) = loadMap(ctx, "amounts")
+    fun setAmount(ctx: Context, key: String, amount: Long?) {
+        val m = loadAmounts(ctx).toMutableMap()
+        if (amount == null) m.remove(key) else m[key] = amount.toString()
+        saveMap(ctx, "amounts", m)
+    }
+
+    /** 메모 (이 결제만) */
+    fun loadMemos(ctx: Context) = loadMap(ctx, "memos")
+    fun setMemo(ctx: Context, key: String, memo: String) {
+        val m = loadMemos(ctx).toMutableMap()
+        if (memo.isBlank()) m.remove(key) else m[key] = memo.trim()
+        saveMap(ctx, "memos", m)
+    }
+
+    /** 이 가게는 앞으로 계속 가계부에서 빼기 */
+    fun loadShopExcludes(ctx: Context): Set<String> = prefs(ctx).getStringSet("shopEx", emptySet())!!.toSet()
+    fun setShopExclude(ctx: Context, merchant: String, on: Boolean) {
+        val n = normMerchant(merchant); if (n.isEmpty()) return
+        val cur = loadShopExcludes(ctx)
+        prefs(ctx).edit().putStringSet("shopEx", if (on) cur + n else cur - n).apply()
+    }
+
+    /** 직접 정기결제로 지정한 가게 */
+    fun loadForcedRecurring(ctx: Context): Set<String> = prefs(ctx).getStringSet("recForce", emptySet())!!.toSet()
+    fun setForcedRecurring(ctx: Context, id: String, on: Boolean) {
+        val cur = loadForcedRecurring(ctx)
+        prefs(ctx).edit().putStringSet("recForce", if (on) cur + id else cur - id).apply()
+    }
+
+    /** 확인 필요 → 확인함 */
+    fun loadReviewed(ctx: Context): Set<String> = prefs(ctx).getStringSet("reviewed", emptySet())!!.toSet()
+    fun markReviewed(ctx: Context, key: String) =
+        prefs(ctx).edit().putStringSet("reviewed", loadReviewed(ctx) + key).apply()
+
+    /* ---------- 읽지 못한 문자 ---------- */
+
+    private fun pendingFile(ctx: Context) = File(ctx.filesDir, "pending.json")
+
+    fun loadPending(ctx: Context): List<Pending> = synchronized(lock) {
+        val f = pendingFile(ctx)
+        if (!f.exists()) return emptyList()
+        val done = loadPendingDone(ctx)
+        return try {
+            val arr = JSONArray(f.readText())
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                Pending(o.getString("k"), o.getString("c"), o.getLong("t"), o.getString("b"), o.optLong("g"))
+            }.filter { it.key !in done }
+        } catch (_: Exception) { emptyList() }
+    }
+
+    fun addPending(ctx: Context, list: List<Pending>): Unit = synchronized(lock) {
+        if (list.isEmpty()) return
+        val f = pendingFile(ctx)
+        val arr = try { if (f.exists()) JSONArray(f.readText()) else JSONArray() } catch (_: Exception) { JSONArray() }
+        val keys = HashSet<String>()
+        for (i in 0 until arr.length()) keys.add(arr.getJSONObject(i).getString("k"))
+        list.filter { keys.add(it.key) }.forEach { p ->
+            arr.put(JSONObject().apply { put("k", p.key); put("c", p.card); put("t", p.time); put("b", p.body); put("g", p.guess) })
+        }
+        f.writeText(arr.toString())
+    }
+
+    /** 처리한(넣었거나 무시한) 문자 */
+    fun loadPendingDone(ctx: Context): Set<String> = prefs(ctx).getStringSet("pendingDone", emptySet())!!.toSet()
+    fun markPendingDone(ctx: Context, keys: Collection<String>) =
+        prefs(ctx).edit().putStringSet("pendingDone", loadPendingDone(ctx) + keys).apply()
+
+    /* ---------- 백업용: 전체 내보내기 / 되돌리기 ---------- */
+
+    /** 백업 설정(bk_)은 빼고 전부 */
+    fun exportAll(ctx: Context): JSONObject {
+        val out = JSONObject()
+        out.put("app", "household-book"); out.put("version", 1); out.put("created", System.currentTimeMillis())
+        synchronized(lock) {
+            val f = txnFile(ctx)
+            out.put("txns", if (f.exists()) JSONArray(f.readText()) else JSONArray())
+            val pf = pendingFile(ctx)
+            out.put("pending", if (pf.exists()) JSONArray(pf.readText()) else JSONArray())
+        }
+        val p = JSONObject()
+        for ((k, v) in prefs(ctx).all) {
+            if (k.startsWith("bk_")) continue
+            when (v) {
+                is String -> p.put(k, JSONObject().put("s", v))
+                is Long -> p.put(k, JSONObject().put("l", v))
+                is Int -> p.put(k, JSONObject().put("i", v))
+                is Boolean -> p.put(k, JSONObject().put("b", v))
+                is Set<*> -> p.put(k, JSONObject().put("set", JSONArray(v.map { it.toString() })))
+            }
+        }
+        out.put("prefs", p)
+        return out
+    }
+
+    fun importAll(ctx: Context, data: JSONObject) {
+        require(data.optString("app") == "household-book") { "가계부 백업 파일이 아니에요" }
+        synchronized(lock) {
+            txnFile(ctx).writeText(data.getJSONArray("txns").toString())
+            pendingFile(ctx).writeText(data.optJSONArray("pending")?.toString() ?: "[]")
+        }
+        val src = data.getJSONObject("prefs")
+        val ed = prefs(ctx).edit()
+        prefs(ctx).all.keys.filterNot { it.startsWith("bk_") }.forEach { ed.remove(it) }
+        for (k in src.keys()) {
+            if (k.startsWith("bk_")) continue
+            val o = src.getJSONObject(k)
+            when {
+                o.has("s") -> ed.putString(k, o.getString("s"))
+                o.has("l") -> ed.putLong(k, o.getLong("l"))
+                o.has("i") -> ed.putInt(k, o.getInt("i"))
+                o.has("b") -> ed.putBoolean(k, o.getBoolean("b"))
+                o.has("set") -> {
+                    val a = o.getJSONArray("set"); ed.putStringSet(k, (0 until a.length()).map { a.getString(it) }.toSet())
+                }
+            }
+        }
+        ed.apply()
+    }
+
     fun lastSync(ctx: Context): Long = prefs(ctx).getLong("lastSync", 0L)
     fun setLastSync(ctx: Context, v: Long) = prefs(ctx).edit().putLong("lastSync", v).apply()
 

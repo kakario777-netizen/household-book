@@ -180,7 +180,7 @@ private fun Trend(trend: List<Pair<Int, Long>>, cur: Int) {
                 val h = (v.coerceAtLeast(0).toFloat() / max * 110f)
                 Box(
                     Modifier.fillMaxWidth(0.7f).height(h.coerceAtLeast(2f).dp)
-                        .background(if (m == cur) Green else Color(0xFFB8DCC9), RoundedCornerShape(topStart = 5.dp, topEnd = 5.dp))
+                        .background(if (m == cur) Green else Green.copy(alpha = 0.35f), RoundedCornerShape(topStart = 5.dp, topEnd = 5.dp))
                 )
                 Spacer(Modifier.height(4.dp))
                 Text("${m % 100}월", fontSize = 12.sp, color = if (m == cur) Green else Gray)

@@ -47,8 +47,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-val Green = Color(0xFF2E7D5B)
-
 class MainActivity : ComponentActivity() {
 
     private var data by mutableStateOf(BookData.EMPTY)
@@ -64,6 +62,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         hasSms = smsGranted()
+        ThemeState.palette = ThemeState.load(this)
         setContent {
             MaterialTheme(colorScheme = lightColorScheme(primary = Green, secondary = Green)) {
                 App()

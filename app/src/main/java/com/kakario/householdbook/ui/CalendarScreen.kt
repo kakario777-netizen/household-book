@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kakario.householdbook.Green
+import com.kakario.householdbook.GreenSoft
 import com.kakario.householdbook.data.Book
 import com.kakario.householdbook.data.BookData
 import com.kakario.householdbook.data.Entry

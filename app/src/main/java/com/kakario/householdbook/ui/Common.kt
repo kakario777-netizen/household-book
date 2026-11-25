@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kakario.householdbook.CardBg
 import com.kakario.householdbook.Green
 import com.kakario.householdbook.data.BookData
 import com.kakario.householdbook.data.CATEGORIES
@@ -272,7 +273,7 @@ fun SectionTitle(text: String, right: String = "") {
 fun SummaryCard(content: @Composable () -> Unit) {
     Column(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
-            .background(Color(0xFFF1F8F4), RoundedCornerShape(16.dp)).padding(16.dp)
+            .background(CardBg, RoundedCornerShape(16.dp)).padding(16.dp)
     ) { content() }
 }
 
@@ -282,4 +283,3 @@ fun BigAmount(label: String, v: Long, color: Color = MaterialTheme.colorScheme.o
     Text("${num(v)}원", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = color, maxLines = 1)
 }
 
-val GreenSoft = Green.copy(alpha = 0.14f)

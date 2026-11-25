@@ -11,6 +11,7 @@ import android.provider.Telephony
 import android.widget.RemoteViews
 import com.kakario.householdbook.MainActivity
 import com.kakario.householdbook.R
+import com.kakario.householdbook.ThemeState
 import com.kakario.householdbook.data.Book
 import com.kakario.householdbook.data.BookData
 import com.kakario.householdbook.data.dayStart
@@ -59,6 +60,7 @@ class TodayWidget : AppWidgetProvider() {
                 setTextViewText(R.id.w_title, title)
                 setTextViewText(R.id.w_amount, if (today == 0L) "아직 안 쓰셨어요" else "${num(today)}원 쓰셨어요")
                 setTextViewText(R.id.w_month, "이번 달 ${num(month)}원")
+                setTextColor(R.id.w_month, ThemeState.load(context).primary.toInt())
                 setOnClickPendingIntent(R.id.widget_root, open)
             }
             manager.updateAppWidget(ids, views)

@@ -1,5 +1,17 @@
 package com.kakario.householdbook.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.graphics.Color
+import com.kakario.householdbook.PALETTES
+import com.kakario.householdbook.ThemeState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -49,47 +61,63 @@ fun SettingsScreen(
     onAskSms: () -> Unit, onOpenSettings: () -> Unit, onResync: () -> Unit, onChanged: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    var editing by remember { mutableStateOf<CardConf?>(null) }
-    var isNew by remember { mutableStateOf(false) }
+    var page by rememberSaveable { mutableStateOf("main") }
     var confirmResync by remember { mutableStateOf(false) }
     val updater = remember { Updater.get(ctx) }
-    val cards = data.cards
 
-    fun save(list: List<CardConf>) { Store.saveCards(ctx, list); onChanged() }
+    if (page == "cards") {
+        BackHandler { page = "main" }
+        CardsPage(data, hasSms, onBack = { page = "main" }, onChanged = onChanged)
+        return
+    }
 
     LazyColumn(Modifier.fillMaxSize()) {
         if (!hasSms) item { PermissionCard(onAskSms, onOpenSettings) }
 
-        item { SectionTitle("카드", "켜진 카드의 결제 문자만 읽어요") }
-        items(cards, key = { it.id }) { c ->
+        // 카드 설정 (한 단계 들어가서 켜고 끄기)
+        item {
             Row(
-                Modifier.fillMaxWidth().clickable { isNew = false; editing = c }.padding(horizontal = 16.dp, vertical = 8.dp),
+                Modifier.fillMaxWidth().clickable { page = "cards" }.padding(horizontal = 16.dp, vertical = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text(c.name, fontSize = 15.sp)
+                    Text("카드 설정", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                     Text(
-                        "문자 번호 " + c.numbers.joinToString(", ").ifEmpty { "없음 (문자 내용의 카드 이름으로 찾음)" },
+                        "켜진 카드: " + data.cards.filter { it.enabled }.joinToString(", ") { it.name }.ifEmpty { "없음" },
                         fontSize = 12.sp, color = Gray, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Switch(checked = c.enabled, onCheckedChange = { on -> save(cards.map { if (it.id == c.id) it.copy(enabled = on) else it }) })
+                Text("›", fontSize = 22.sp, color = Gray)
             }
             HorizontalDivider(color = LightGray, modifier = Modifier.padding(horizontal = 16.dp))
         }
+
+        // 화면 색감
+        item { SectionTitle("화면 색감") }
         item {
-            TextButton(onClick = {
-                isNew = true
-                editing = CardConf("c${System.currentTimeMillis()}", "", "", emptyList(), true)
-            }, modifier = Modifier.padding(horizontal = 8.dp)) { Text("+ 카드 추가") }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                PALETTES.forEach { p ->
+                    val on = ThemeState.palette.id == p.id
+                    Column(
+                        Modifier.weight(1f)
+                            .background(Color(p.card), RoundedCornerShape(12.dp))
+                            .border(if (on) 2.dp else 0.8.dp, if (on) Color(p.primary) else LightGray, RoundedCornerShape(12.dp))
+                            .clickable { ThemeState.set(ctx, p); onChanged() }
+                            .padding(vertical = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Box(Modifier.size(26.dp).background(Color(p.primary), CircleShape))
+                        Spacer(Modifier.height(6.dp))
+                        Text(p.name, fontSize = 13.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal)
+                    }
+                }
+            }
         }
 
         item { SectionTitle("문자") }
         item {
             Column(Modifier.padding(horizontal = 16.dp)) {
-                Text(
-                    "문자 권한: " + if (hasSms) "허용됨" else "없음", fontSize = 14.sp,
-                )
+                Text("문자 권한: " + if (hasSms) "허용됨" else "없음", fontSize = 14.sp)
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "카드 번호를 바꾸거나 추가했으면 최근 1년 문자를 다시 읽어 주세요. 고친 분류·제외 표시는 그대로 남아요.",
@@ -111,10 +139,7 @@ fun SettingsScreen(
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(onClick = { updater.check(quiet = false) }) { Text("업데이트 확인") }
                 Spacer(Modifier.height(14.dp))
-                Text(
-                    "결제 내역은 이 폰 안에만 저장되고, 서버나 구글 백업으로 보내지 않아요.",
-                    fontSize = 12.sp, color = Gray,
-                )
+                Text("결제 내역은 이 폰 안에만 저장되고, 서버나 구글 백업으로 보내지 않아요.", fontSize = 12.sp, color = Gray)
                 Spacer(Modifier.height(30.dp))
             }
         }
@@ -123,12 +148,83 @@ fun SettingsScreen(
     if (confirmResync) {
         AlertDialog(
             onDismissRequest = { confirmResync = false },
-            title = { Text("문자 다시 읽기") },
-            text = { Text("최근 1년 결제 문자를 처음부터 다시 읽어요. 이미 있는 내역은 겹치지 않게 합쳐요.") },
+            title = { Text("최근 1년 문자를 다시 읽을까요?") },
+            text = { Text("결제 문자를 처음부터 다시 읽어요. 이미 있는 내역은 겹치지 않게 합치고, 고친 분류는 그대로 둬요.") },
             confirmButton = {
-                TextButton(onClick = { Store.resetSync(ctx); confirmResync = false; onResync() }) { Text("읽기") }
+                TextButton(onClick = { Store.resetSync(ctx); confirmResync = false; onResync() }) { Text("다시 읽기") }
             },
             dismissButton = { TextButton(onClick = { confirmResync = false }) { Text("취소") } },
+        )
+    }
+}
+
+/** 카드 설정 화면 (설정 안의 두 번째 단계). 켜고 끌 때 한 번 더 물어봄 */
+@Composable
+private fun CardsPage(data: BookData, hasSms: Boolean, onBack: () -> Unit, onChanged: () -> Unit) {
+    val ctx = LocalContext.current
+    val cards = data.cards
+    var editing by remember { mutableStateOf<CardConf?>(null) }
+    var isNew by remember { mutableStateOf(false) }
+    var toggling by remember { mutableStateOf<CardConf?>(null) }
+
+    fun save(list: List<CardConf>) { Store.saveCards(ctx, list); onChanged() }
+
+    LazyColumn(Modifier.fillMaxSize()) {
+        item {
+            Row(
+                Modifier.fillMaxWidth().clickable(onClick = onBack).padding(horizontal = 8.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("‹", fontSize = 26.sp, color = Gray, modifier = Modifier.padding(horizontal = 8.dp))
+                Text("카드 설정", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            }
+            Text(
+                "켜진 카드의 결제 문자만 가계부에 들어가요. 카드를 누르면 이름·문자 번호를 고칠 수 있어요.",
+                fontSize = 12.sp, color = Gray, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+        items(cards, key = { it.id }) { c ->
+            Row(
+                Modifier.fillMaxWidth().clickable { isNew = false; editing = c }.padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(c.name, fontSize = 15.sp, color = if (c.enabled) Color.Unspecified else Gray)
+                    Text(
+                        "문자 번호 " + c.numbers.joinToString(", ").ifEmpty { "없음 (문자 내용의 카드 이름으로 찾음)" },
+                        fontSize = 12.sp, color = Gray, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Switch(checked = c.enabled, onCheckedChange = { toggling = c })
+            }
+            HorizontalDivider(color = LightGray, modifier = Modifier.padding(horizontal = 16.dp))
+        }
+        item {
+            TextButton(onClick = {
+                isNew = true
+                editing = CardConf("c${System.currentTimeMillis()}", "", "", emptyList(), true)
+            }, modifier = Modifier.padding(horizontal = 8.dp)) { Text("+ 카드 추가") }
+        }
+    }
+
+    toggling?.let { c ->
+        val turnOn = !c.enabled
+        AlertDialog(
+            onDismissRequest = { toggling = null },
+            title = { Text("${c.name}를 ${if (turnOn) "켤" else "끌"}까요?") },
+            text = {
+                Text(
+                    if (turnOn) "이 카드의 결제 문자를 다시 가계부에 넣어요."
+                    else "끄면 앞으로 이 카드 결제 문자는 가계부에 안 들어가요. 이미 들어간 내역은 그대로 남아요."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    save(cards.map { if (it.id == c.id) it.copy(enabled = turnOn) else it })
+                    toggling = null
+                }) { Text(if (turnOn) "켜기" else "끄기") }
+            },
+            dismissButton = { TextButton(onClick = { toggling = null }) { Text("취소") } },
         )
     }
 
